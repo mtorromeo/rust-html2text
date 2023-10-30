@@ -81,6 +81,7 @@ use std::cmp::{max, min};
 use std::io;
 use std::io::Write;
 use std::iter::{once, repeat};
+use std::num::NonZeroUsize;
 
 /// A dummy writer which does nothing
 struct Discard {}
@@ -132,7 +133,7 @@ impl SizeEstimate {
 #[derive(Clone, Debug)]
 /// Render tree table cell
 pub struct RenderTableCell {
-    colspan: usize,
+    colspan: NonZeroUsize,
     content: Vec<RenderNode>,
     size_estimate: Cell<Option<SizeEstimate>>,
     col_width: Option<usize>, // Actual width to use
@@ -182,7 +183,7 @@ impl RenderTableRow {
     /// Count the number of cells in the row.
     /// Takes into account colspan.
     pub fn num_cells(&self) -> usize {
-        self.cells.iter().map(|cell| cell.colspan).sum()
+        self.cells.iter().map(|cell| cell.colspan.get()).sum()
     }
     /// Return an iterator over (column, &cell)s, which
     /// takes into account colspan.
@@ -192,7 +193,7 @@ impl RenderTableRow {
         for cell in &mut self.cells {
             let colspan = cell.colspan;
             result.push((colno, cell));
-            colno += colspan;
+            colno += colspan.get();
         }
         result
     }
@@ -208,14 +209,14 @@ impl RenderTableRow {
             let col_width = if vertical {
                 col_sizes[colno]
             } else {
-                col_sizes[colno..colno + cell.colspan].iter().sum::<usize>()
+                col_sizes[colno..colno + cell.colspan.get()].iter().sum::<usize>()
             };
             // Skip any zero-width columns
             if col_width > 0 {
-                cell.col_width = Some(col_width + cell.colspan - 1);
+                cell.col_width = Some(col_width + cell.colspan.get() - 1);
                 result.push(RenderNode::new(RenderNodeInfo::TableCell(cell)));
             }
-            colno += colspan;
+            colno += colspan.get();
         }
         result
     }
@@ -276,14 +277,14 @@ impl RenderTable {
             let mut colno = 0usize;
             for cell in row.cells() {
                 let cellsize = cell.get_size_estimate();
-                for colnum in 0..cell.colspan {
+                for colnum in 0..cell.colspan.get() {
                     sizes[colno + colnum].size += cellsize.size / cell.colspan;
                     sizes[colno + colnum].min_width = max(
                         sizes[colno + colnum].min_width / cell.colspan,
                         cellsize.min_width,
                     );
                 }
-                colno += cell.colspan;
+                colno += cell.colspan.get();
             }
         }
         let size = sizes.iter().map(|s| s.size).sum(); // Include borders?
@@ -703,7 +704,7 @@ fn td_to_render_tree<'a, 'b, T: Write>(
     pending(handle, move |_, children| {
         Some(RenderNode::new(RenderNodeInfo::TableCell(
             RenderTableCell {
-                colspan,
+                colspan: NonZeroUsize::new(colspan).unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
                 content: children,
                 size_estimate: Cell::new(None),
                 col_width: None,
@@ -1379,16 +1380,16 @@ fn render_table_tree<T: Write, D: TextDecorator>(
             let mut estimate = cell.get_size_estimate();
             // If the cell has a colspan>1, then spread its size between the
             // columns.
-            estimate.size /= cell.colspan;
-            estimate.min_width /= cell.colspan;
-            for i in 0..cell.colspan {
+            estimate.size /= cell.colspan.get();
+            estimate.min_width /= cell.colspan.get();
+            for i in 0..cell.colspan.get() {
                 col_sizes[colno + i] = (col_sizes[colno + i]).max(estimate);
             }
-            colno += cell.colspan;
+            colno += cell.colspan.get();
         }
     }
     // TODO: remove empty columns
-    let tot_size: usize = col_sizes.iter().map(|est| est.size).sum();
+    let tot_size: usize = max(col_sizes.iter().map(|est| est.size).sum(), 1);
     let min_size: usize = col_sizes.iter().map(|est| est.min_width).sum::<usize>()
         + col_sizes.len().saturating_sub(1);
     let width = renderer.width();
@@ -1404,7 +1405,7 @@ fn render_table_tree<T: Write, D: TextDecorator>(
                 } else {
                     min(
                         sz.size,
-                        if usize::MAX / width <= sz.size {
+                        if width > 0 && usize::MAX / width <= sz.size {
                             // The provided width is too large to multiply by width,
                             // so do it the other way around.
                             max((width / tot_size) * sz.size, sz.min_width)
