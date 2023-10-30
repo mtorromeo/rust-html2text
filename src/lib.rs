@@ -704,7 +704,7 @@ fn td_to_render_tree<'a, 'b, T: Write>(
     pending(handle, move |_, children| {
         Some(RenderNode::new(RenderNodeInfo::TableCell(
             RenderTableCell {
-                colspan: NonZeroUsize::new(colspan).unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
+                colspan: NonZeroUsize::new(colspan).unwrap_or(NonZeroUsize::MIN),
                 content: children,
                 size_estimate: Cell::new(None),
                 col_width: None,
